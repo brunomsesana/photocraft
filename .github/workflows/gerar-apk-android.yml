@@ -1,0 +1,69 @@
+name: Gerar APK Android (PhotoCraft)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/gerar-apk-android.yml'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Configurar Java 21 para o Android Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Baixar build oficial WASM do PhotoCraft ou compilar do zero
+        run: |
+          mkdir -p www
+          LATEST_URL=$(curl -s https://api.github.com/repos/storytold/photocraft/releases/latest \
+            | jq -r '.assets[] | select(.name | test("photocraft-web-.*\\.zip$")) | .browser_download_url' | head -n 1)
+          echo "Baixando bundle de: $LATEST_URL"
+          curl -L "$LATEST_URL" -o photocraft-web.zip
+          unzip -q photocraft-web.zip -d www_tmp
+          # Move os arquivos extraídos (index.html, .wasm, .js) para a pasta www/
+          if [ -f www_tmp/index.html ]; then
+            mv www_tmp/* www/
+          else
+            SUBDIR=$(find www_tmp -name "index.html" -printf "%h\n" | head -n 1)
+            mv "$SUBDIR"/* www/
+          fi
+
+      - name: Criar projeto Android com Capacitor
+        run: |
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "PhotoCraft" "ai.storyteller.photocraft" --web-dir www
+          npx cap add android
+
+      - name: Configurar tela cheia e orientação Paisagem (Desktop Mode)
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          sed -i 's/android:name=".MainActivity"/android:name=".MainActivity" android:screenOrientation="sensorLandscape" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"/' "$MANIFEST"
+
+      - name: Sincronizar e Compilar o APK
+        run: |
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Publicar APK para Download nos Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoCraft-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
